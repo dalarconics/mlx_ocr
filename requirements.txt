@@ -1,0 +1,4 @@
+transformers
+mlx
+pillow
+torch
