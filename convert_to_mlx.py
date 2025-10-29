@@ -30,19 +30,26 @@ def transpose_conv(weight):
     return to_numpy(weight).transpose(0, 2, 3, 1)
 
 
+def append_param(weights, name: str, tensor: torch.Tensor):
+    weights.append((name, mx.array(to_numpy(tensor))))
+
+
+def maybe_append_param(weights, state_dict: Dict[str, torch.Tensor], name: str, key: str):
+    tensor = state_dict.get(key)
+    if tensor is not None:
+        append_param(weights, name, tensor)
+
+
 def collect_encoder_weights(
     state_dict: Dict[str, torch.Tensor], config_dict: dict
 ) -> Iterable[Tuple[str, mx.array]]:
     weights = []
 
-    weights.append(
-        ("encoder.cls_token", mx.array(to_numpy(state_dict["encoder.embeddings.cls_token"])))
-    )
-    weights.append(
-        (
-            "encoder.pos_embedding",
-            mx.array(to_numpy(state_dict["encoder.embeddings.position_embeddings"])),
-        )
+    append_param(weights, "encoder.cls_token", state_dict["encoder.embeddings.cls_token"])
+    append_param(
+        weights,
+        "encoder.pos_embedding",
+        state_dict["encoder.embeddings.position_embeddings"],
     )
     weights.append(
         (
@@ -57,35 +64,24 @@ def collect_encoder_weights(
         )
 
     num_hidden_layers = config_dict["encoder"]["num_hidden_layers"]
+    qkv_bias = config_dict["encoder"].get("qkv_bias", False)
     for idx in range(num_hidden_layers):
         prefix = f"encoder.encoder.layer.{idx}"
-        target = f"encoder.transformer.layers.{idx}"
+        target = f"encoder.layers.{idx}"
 
         weights.extend(
             [
                 (
-                    f"{target}.attention.query_proj.weight",
+                    f"{target}.attention.q_proj.weight",
                     mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.query.weight"])),
                 ),
                 (
-                    f"{target}.attention.query_proj.bias",
-                    mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.query.bias"])),
-                ),
-                (
-                    f"{target}.attention.key_proj.weight",
+                    f"{target}.attention.k_proj.weight",
                     mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.key.weight"])),
                 ),
                 (
-                    f"{target}.attention.key_proj.bias",
-                    mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.key.bias"])),
-                ),
-                (
-                    f"{target}.attention.value_proj.weight",
+                    f"{target}.attention.v_proj.weight",
                     mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.value.weight"])),
-                ),
-                (
-                    f"{target}.attention.value_proj.bias",
-                    mx.array(to_numpy(state_dict[f"{prefix}.attention.attention.value.bias"])),
                 ),
                 (
                     f"{target}.attention.out_proj.weight",
@@ -130,14 +126,34 @@ def collect_encoder_weights(
             ]
         )
 
+        if qkv_bias:
+            maybe_append_param(
+                weights,
+                state_dict,
+                f"{target}.attention.q_proj.bias",
+                f"{prefix}.attention.attention.query.bias",
+            )
+            maybe_append_param(
+                weights,
+                state_dict,
+                f"{target}.attention.k_proj.bias",
+                f"{prefix}.attention.attention.key.bias",
+            )
+            maybe_append_param(
+                weights,
+                state_dict,
+                f"{target}.attention.v_proj.bias",
+                f"{prefix}.attention.attention.value.bias",
+            )
+
     weights.extend(
         [
             (
-                "encoder.transformer.ln.weight",
+                "encoder.final_layer_norm.weight",
                 mx.array(to_numpy(state_dict["encoder.layernorm.weight"])),
             ),
             (
-                "encoder.transformer.ln.bias",
+                "encoder.final_layer_norm.bias",
                 mx.array(to_numpy(state_dict["encoder.layernorm.bias"])),
             ),
         ]
@@ -295,19 +311,6 @@ def collect_decoder_weights(
                 ),
             ]
         )
-
-    weights.append(
-        (
-            "decoder.final_layer_norm.weight",
-            mx.array(to_numpy(state_dict[f"{decoder_prefix}.final_layer_norm.weight"])),
-        )
-    )
-    weights.append(
-        (
-            "decoder.final_layer_norm.bias",
-            mx.array(to_numpy(state_dict[f"{decoder_prefix}.final_layer_norm.bias"])),
-        )
-    )
 
     weights.append(
         (

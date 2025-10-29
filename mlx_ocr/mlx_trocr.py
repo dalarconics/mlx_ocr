@@ -8,6 +8,7 @@ from typing import Optional
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.nn.layers.activations import gelu
 from mlx.nn.layers.transformer import MultiHeadAttention
 
 
@@ -126,6 +127,40 @@ def load_config_dict(config_path: str | Path) -> TrOCRConfig:
     return config_from_dict(config_dict)
 
 
+class VisionEncoderLayer(nn.Module):
+    def __init__(self, config: VisionEncoderConfig):
+        super().__init__()
+        self.attention = TrOCRAttention(
+            embed_dim=config.hidden_size,
+            num_heads=config.num_attention_heads,
+            dropout=config.attention_dropout_prob,
+            qkv_bias=config.qkv_bias,
+            out_bias=True,
+        )
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.ln1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.ln2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.linear1 = nn.Linear(config.hidden_size, config.intermediate_size)
+        self.linear2 = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.activation = gelu
+
+    def __call__(self, hidden_states: mx.array) -> mx.array:
+        residual = hidden_states
+        attn_input = self.ln1(hidden_states)
+        attn_output = self.attention(attn_input, attention_mask=None)
+        attn_output = self.dropout(attn_output)
+        hidden_states = residual + attn_output
+
+        residual = hidden_states
+        feedforward_input = self.ln2(hidden_states)
+        feedforward_output = self.linear1(feedforward_input)
+        feedforward_output = self.activation(feedforward_output)
+        feedforward_output = self.linear2(feedforward_output)
+        feedforward_output = self.dropout(feedforward_output)
+        hidden_states = residual + feedforward_output
+        return hidden_states
+
+
 class VisionEncoder(nn.Module):
     def __init__(self, config: VisionEncoderConfig):
         super().__init__()
@@ -142,21 +177,10 @@ class VisionEncoder(nn.Module):
         self.pos_embedding = mx.zeros((1, config.num_patches + 1, config.hidden_size))
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.transformer = nn.TransformerEncoder(
-            num_layers=config.num_hidden_layers,
-            dims=config.hidden_size,
-            num_heads=config.num_attention_heads,
-            mlp_dims=config.intermediate_size,
-            dropout=config.hidden_dropout_prob,
-        )
-
-        # Override layer norms to match Hugging Face eps.
-        for layer in self.transformer.layers:
-            layer.ln1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            layer.ln2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            if hasattr(layer, "attention"):
-                layer.attention.dropout1 = nn.Dropout(config.hidden_dropout_prob)
-        self.transformer.ln = nn.LayerNorm(
+        self.layers = [
+            VisionEncoderLayer(config) for _ in range(config.num_hidden_layers)
+        ]
+        self.final_layer_norm = nn.LayerNorm(
             config.hidden_size, eps=config.layer_norm_eps
         )
 
@@ -177,7 +201,11 @@ class VisionEncoder(nn.Module):
         x = x + pos_embedding
         x = self.dropout(x)
 
-        return self.transformer(x, mask=None)
+        hidden_states = x
+        for layer in self.layers:
+            hidden_states = layer(hidden_states)
+        hidden_states = self.final_layer_norm(hidden_states)
+        return hidden_states
 
 
 class TrOCRAttention(nn.Module):
@@ -188,6 +216,8 @@ class TrOCRAttention(nn.Module):
         dropout: float = 0.0,
         kdim: Optional[int] = None,
         vdim: Optional[int] = None,
+        qkv_bias: bool = True,
+        out_bias: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -199,10 +229,10 @@ class TrOCRAttention(nn.Module):
         kdim = kdim or embed_dim
         vdim = vdim or embed_dim
 
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.k_proj = nn.Linear(kdim, embed_dim, bias=True)
-        self.v_proj = nn.Linear(vdim, embed_dim, bias=True)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=qkv_bias)
+        self.k_proj = nn.Linear(kdim, embed_dim, bias=qkv_bias)
+        self.v_proj = nn.Linear(vdim, embed_dim, bias=qkv_bias)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=out_bias)
 
     def _shape(self, tensor: mx.array) -> mx.array:
         bsz, seq_len, _ = tensor.shape
@@ -253,7 +283,7 @@ class TrOCRDecoderLayer(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(config.dropout)
         self.activation_dropout = nn.Dropout(config.activation_dropout)
-        self.activation = nn.layers.activations.gelu
+        self.activation = gelu
 
         self.self_attn = TrOCRAttention(
             embed_dim=config.hidden_size,
@@ -337,9 +367,6 @@ class TrOCRDecoder(nn.Module):
         self.layers = [
             TrOCRDecoderLayer(config) for _ in range(config.decoder_layers)
         ]
-        self.final_layer_norm = nn.LayerNorm(
-            config.hidden_size, eps=config.layer_norm_eps
-        )
         self.padding_idx = config.pad_token_id
 
     def _create_causal_mask(self, seq_len: int, dtype: mx.Dtype) -> mx.array:
@@ -413,7 +440,6 @@ class TrOCRDecoder(nn.Module):
                 encoder_attention_mask=encoder_mask,
             )
 
-        hidden_states = self.final_layer_norm(hidden_states)
         return hidden_states
 
 
