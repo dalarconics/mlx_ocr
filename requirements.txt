@@ -1,4 +1,4 @@
 transformers
 mlx
 pillow
-torch
+numpy

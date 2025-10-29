@@ -1,53 +1,113 @@
 #!/usr/bin/env python3
 """
-MLX OCR Demo using Hugging Face TrOCR
+MLX OCR Demo using a converted TrOCR checkpoint.
 
-This script demonstrates optical character recognition (OCR) using
-the TrOCR model from Hugging Face, optimized for Apple Silicon with MLX.
+This script loads MLX weights exported from the Hugging Face TrOCR model and
+performs greedy decoding on an input image.
 """
 
-import sys
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import mlx.core as mx
 from PIL import Image
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from transformers import TrOCRProcessor
+
+from mlx_ocr import MLXTrOCRModel, load_config_dict
+
+DEFAULT_CONFIG = Path("configs/trocr-base-printed.json")
+DEFAULT_WEIGHTS = Path("weights/trocr-base-printed.npz")
+
+
+def load_image(image_path: Path) -> Image.Image:
+    image = Image.open(image_path)
+    return image.convert("RGB")
+
+
+def prepare_inputs(processor: TrOCRProcessor, image: Image.Image) -> mx.array:
+    pixel_values = processor(images=image, return_tensors="np").pixel_values
+    pixel_values = pixel_values.transpose(0, 2, 3, 1)
+    return mx.array(pixel_values, dtype=mx.float32)
+
+
+def decode_sequences(sequences, processor: TrOCRProcessor):
+    # Drop the initial decoder start token
+    trimmed = [seq[1:] for seq in sequences]
+    return processor.batch_decode(trimmed, skip_special_tokens=True)
+
+
+def run_demo(args):
+    image_path = Path(args.image)
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image file '{image_path}' not found.")
+
+    if not args.weights.exists():
+        raise FileNotFoundError(
+            f"MLX weight file '{args.weights}' not found. "
+            "Run convert_to_mlx.py first."
+        )
+
+    processor = TrOCRProcessor.from_pretrained(args.model_name)
+    config = load_config_dict(args.config)
+    model = MLXTrOCRModel(config)
+    model.load_weights(str(args.weights))
+    model.eval()
+    mx.eval(model.parameters())
+
+    image = load_image(image_path)
+    print(f"Processing image: {image_path}")
+    print(f"Image size: {image.size}")
+
+    pixel_values = prepare_inputs(processor, image)
+    generated = model.generate(pixel_values, max_length=args.max_length)
+    generated = mx.eval(generated)
+    sequences = generated.tolist()
+    texts = decode_sequences(sequences, processor)
+
+    print("\nExtracted Text:")
+    print("=" * 50)
+    print(texts[0])
+    print("=" * 50)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run OCR with MLX TrOCR.")
+    parser.add_argument("image", help="Path to the input image.")
+    parser.add_argument(
+        "--model-name",
+        default="microsoft/trocr-base-printed",
+        help="Processor identifier for tokenization and feature extraction.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help="Path to the MLX configuration JSON.",
+    )
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        default=DEFAULT_WEIGHTS,
+        help="Path to the MLX weights (.npz).",
+    )
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=None,
+        help="Optional override for maximum decoding length.",
+    )
+    return parser.parse_args()
+
 
 def main():
-    # Check if image path is provided
-    if len(sys.argv) != 2:
-        print("Usage: python ocr_demo.py <image_path>")
-        print("Example: python ocr_demo.py sample.png")
-        sys.exit(1)
-
-    image_path = sys.argv[1]
-
+    args = parse_args()
     try:
-        # Load the image
-        image = Image.open(image_path).convert('RGB')
-        print(f"Processing image: {image_path}")
-        print(f"Image size: {image.size}")
+        run_demo(args)
+    except Exception as exc:
+        raise SystemExit(f"Error: {exc}")
 
-        # Load the TrOCR processor and model
-        print("Loading TrOCR model...")
-        processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed')
-        model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed')
-
-        # Process the image
-        pixel_values = processor(image, return_tensors="pt").pixel_values
-
-        # Generate text
-        generated_ids = model.generate(pixel_values)
-        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-
-        print("\nExtracted Text:")
-        print("=" * 50)
-        print(generated_text)
-        print("=" * 50)
-
-    except FileNotFoundError:
-        print(f"Error: Image file '{image_path}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error processing image: {str(e)}")
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()
