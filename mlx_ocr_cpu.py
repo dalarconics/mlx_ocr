@@ -6,14 +6,6 @@ This script demonstrates optical character recognition (OCR) using
 the TrOCR model from Hugging Face, optimized for Apple Silicon with MLX.
 """
 
-#!/usr/bin/env python3
-"""
-MLX OCR Demo using Hugging Face TrOCR
-
-This script demonstrates optical character recognition (OCR) using
-the TrOCR model from Hugging Face, optimized for Apple Silicon with MLX.
-"""
-
 import sys
 import os
 from PIL import Image
@@ -21,8 +13,8 @@ from PIL import Image
 def main():
     # Check if image path is provided
     if len(sys.argv) != 2:
-        print("Usage: python ocr_demo.py <image_path>")
-        print("Example: python ocr_demo.py sample.png")
+        print("Usage: python mlx_ocr_cpu.py <image_path>")
+        print("Example: python mlx_ocr_cpu.py sample.png")
         sys.exit(1)
 
     image_path = sys.argv[1]
