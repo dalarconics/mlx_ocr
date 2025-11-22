@@ -1,4 +1,7 @@
 transformers
 mlx
+mlx_lm
+mlx_vlm
+mlx_embeddings
 pillow
 torch
