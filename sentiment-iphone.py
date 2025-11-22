@@ -27,9 +27,9 @@ def get_sentiment(text):
 
 # Test it
 reviews = [
-    "The product quality is amazing and I love it!",
-    "It broke after one day. Terrible experience.",
-    "It arrived on time, but the packaging was slightly damaged."
+    "La calidad de la máquina es increíble y me encanta!",
+    "La máquina funciona durante tres selecciones y se daña.",
+    "Llegaste a tiempo pero a tiempo es tarde, 5 minutos antes es a tiempo, y tarde es perdidas!!."
 ]
 
 print("--- Sentiment Analysis Results ---")
